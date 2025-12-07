@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
     def setup_image_tab(self):
         layout = QVBoxLayout()
 
-        instructions = QLabel("Select 3-10 images, then click 'Find Similar' to display two most similar images.")
+        instructions = QLabel("Select 3-10 images, then choose similarity method (Histogram or SIFT) and click 'Find Similar' to display two most similar images.")
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
 
@@ -195,6 +195,25 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(find_similar_btn)
 
         layout.addLayout(button_layout)
+
+        method_layout = QVBoxLayout()
+        method_label = QLabel("Similarity Method:")
+        method_layout.addWidget(method_label)
+
+        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
+        self.hist_radio = QRadioButton("Histogram Correlation")
+        self.sift_radio = QRadioButton("SIFT Features")
+
+        self.hist_radio.setChecked(True)
+
+        button_group = QButtonGroup()
+        button_group.addButton(self.hist_radio)
+        button_group.addButton(self.sift_radio)
+
+        method_layout.addWidget(self.hist_radio)
+        method_layout.addWidget(self.sift_radio)
+
+        layout.addLayout(method_layout)
 
         self.similar1_label = QLabel("No image")
         self.similar2_label = QLabel("No image")
@@ -339,20 +358,47 @@ class MainWindow(QMainWindow):
         if any(img is None for img in images):
             QMessageBox.error(self, "Error", "Failed to load some images.")
             return
-        hists = [cv2.calcHist([img], [0,1,2], None, [8,8,8], [0,256,0,256,0,256]).flatten() for img in images]
-        for hist in hists:
-            cv2.normalize(hist, hist)
-        max_sim = -1
-        max_pair = (0,1)
-        for i in range(len(hists)):
-            for j in range(i+1, len(hists)):
-                sim = cv2.compareHist(hists[i], hists[j], cv2.HISTCMP_CORREL)
-                if sim > max_sim:
-                    max_sim = sim
-                    max_pair = (i,j)
+
+        if self.hist_radio.isChecked():
+            hists = [cv2.calcHist([img], [0,1,2], None, [8,8,8], [0,256,0,256,0,256]).flatten() for img in images]
+            for hist in hists:
+                cv2.normalize(hist, hist)
+            max_sim = -1
+            max_pair = (0,1)
+            for i in range(len(hists)):
+                for j in range(i+1, len(hists)):
+                    sim = cv2.compareHist(hists[i], hists[j], cv2.HISTCMP_CORREL)
+                    if sim > max_sim:
+                        max_sim = sim
+                        max_pair = (i,j)
+            method_desc = "using histogram correlation"
+        else:
+            sift = cv2.SIFT_create()
+            descriptors = []
+            for img in images:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                kp, des = sift.detectAndCompute(gray, None)
+                descriptors.append((des, len(kp)))
+            max_sim = -1
+            max_pair = (0,1)
+            for i in range(len(descriptors)):
+                for j in range(i+1, len(descriptors)):
+                    des1, kp1 = descriptors[i]
+                    des2, kp2 = descriptors[j]
+                    if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
+                        continue
+                    bf = cv2.BFMatcher()
+                    matches = bf.knnMatch(des1, des2, k=2)
+                    good = [m for m, n in matches if m.distance < 0.7 * n.distance]
+                    sim = len(good)
+                    if sim > max_sim:
+                        max_sim = sim
+                        max_pair = (i,j)
+            method_desc = "using SIFT feature matching"
+
         self.similar1_label.setPixmap(self.convert_cv_to_pixmap(images[max_pair[0]]))
         self.similar2_label.setPixmap(self.convert_cv_to_pixmap(images[max_pair[1]]))
-        self.similarity_label.setText(f"Similarity score: {max_sim:.4f} (using histogram correlation)")
+        self.similarity_label.setText(f"Similarity score: {max_sim} ({method_desc})")
 
     def load_video(self):
         file, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Video files (*.mp4 *.avi *.mov)")
